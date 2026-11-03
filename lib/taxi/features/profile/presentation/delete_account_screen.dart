@@ -1,0 +1,105 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/theme/app_colors.dart';
+import '../../../features/auth/application/auth_providers.dart';
+import '../../../shared/widgets/app_text_field.dart';
+import '../../../shared/widgets/custom_app_bar.dart';
+import '../../../shared/widgets/primary_button.dart';
+
+class DeleteAccountScreen extends ConsumerStatefulWidget {
+  const DeleteAccountScreen({super.key});
+
+  @override
+  ConsumerState<DeleteAccountScreen> createState() => _DeleteAccountScreenState();
+}
+
+class _DeleteAccountScreenState extends ConsumerState<DeleteAccountScreen> {
+  final _reasonController = TextEditingController();
+  bool _submitting = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: const CustomAppBar(title: 'Delete account'),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: AppColors.error.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.warning_amber_rounded, color: AppColors.error),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'This submits a request for admin review. Your account, ride history and wallet balance may be permanently removed once approved.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+            AppTextField(
+              controller: _reasonController,
+              label: 'Reason for leaving',
+              hint: 'Tell us why you want to delete your account',
+              maxLines: 4,
+            ),
+            const SizedBox(height: 24),
+            PrimaryButton(
+              label: 'Submit deletion request',
+              isLoading: _submitting,
+              onPressed: _submit,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _submit() async {
+    if (_reasonController.text.trim().isEmpty) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete account?'),
+        content: const Text('This action cannot be undone once approved. Continue?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete', style: TextStyle(color: AppColors.error)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    if (!mounted) return;
+    setState(() => _submitting = true);
+    try {
+      await ref.read(authRepositoryProvider).requestAccountDeletion(_reasonController.text.trim());
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Deletion request submitted for review')),
+        );
+        Navigator.of(context).pop();
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not submit request. Please try again.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+}
