@@ -357,6 +357,11 @@ class OrderModel {
   /// for "estimated confirmation time" while the order sits in `created`.
   final DateTime? acceptanceDeadlineAt;
 
+  /// When the backend's cancellation hold ends and the order goes to the
+  /// restaurant (Master Settings → Cancellation Policy). Null when the order
+  /// was never held, i.e. the admin has the hold at 0 seconds.
+  final DateTime? restaurantReleaseAt;
+
   final String deliveryAddress;
   final String customerName;
   final String customerPhone;
@@ -423,6 +428,7 @@ class OrderModel {
     this.createdAt,
     this.deliveredAt,
     this.acceptanceDeadlineAt,
+    this.restaurantReleaseAt,
     this.deliveryAddress = '',
     this.customerName = '',
     this.customerPhone = '',
@@ -504,19 +510,31 @@ class OrderModel {
   }
 
   /// The moment self-cancellation closes, or null when the order was never
-  /// eligible. Anchored to the server's [createdAt], so closing and reopening
-  /// the app resumes the countdown instead of restarting it.
+  /// eligible. The admin's hold time when the order was held, otherwise the
+  /// fixed window from [createdAt]. Both are server timestamps, so closing and
+  /// reopening the app resumes the countdown instead of restarting it.
   DateTime? get cancelWindowEnd =>
-      createdAt == null ? null : cancelWindowEndsAt(createdAt!);
+      restaurantReleaseAt ??
+      (createdAt == null ? null : cancelWindowEndsAt(createdAt!));
+
+  /// True while the order is held back from the restaurant: the restaurant
+  /// has not been told yet, and cancelling is free.
+  bool get isHeldFromRestaurant =>
+      orderStatus == 'created' &&
+      restaurantReleaseAt != null &&
+      DateTime.now().isBefore(restaurantReleaseAt!);
 
   /// Statuses the backend lets the customer cancel from — accepted
-  /// (`confirmed`/`preparing`) included, as long as the 90-second window
-  /// from placement is still open.
+  /// (`confirmed`/`preparing`) included, as long as the window is still open.
   bool get isCancellableStatus =>
       isActive &&
       const {'created', 'confirmed', 'preparing'}.contains(orderStatus);
 
-  bool get canCancel => isCancellableStatus && isCancelWindowOpen(createdAt);
+  bool get canCancel {
+    final end = cancelWindowEnd;
+    return isCancellableStatus &&
+        (end == null || DateTime.now().isBefore(end));
+  }
 
   bool get hasRider => deliveryPartner != null && dispatchStatus == 'accepted';
   bool get showDropOtp => dropOtpRequired && !dropOtpVerified;
@@ -719,6 +737,7 @@ class OrderModel {
     final created = json['createdAt']?.toString();
     final delivered = json['deliveredAt']?.toString();
     final acceptanceDeadline = json['acceptanceDeadlineAt']?.toString();
+    final releaseAt = json['restaurantReleaseAt']?.toString();
 
     return OrderModel(
       id: (json['_id'] ?? json['orderMongoId'] ?? '').toString(),
@@ -823,6 +842,8 @@ class OrderModel {
       acceptanceDeadlineAt: acceptanceDeadline == null
           ? null
           : DateTime.tryParse(acceptanceDeadline),
+      restaurantReleaseAt:
+          releaseAt == null ? null : DateTime.tryParse(releaseAt),
       deliveryAddress: [
         address['street'],
         address['city'],

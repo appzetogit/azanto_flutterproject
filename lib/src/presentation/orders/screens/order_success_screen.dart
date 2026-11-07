@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/utils/haptics.dart';
 import '../../../data/models/order_model.dart';
+import '../../../shared/orders/cancel_window.dart';
 import '../../branding/app_colors.dart';
 import '../../common_widgets/app_snackbar.dart';
 import '../../navigation/route_names.dart';
@@ -26,6 +27,7 @@ class _OrderSuccessScreenState extends ConsumerState<OrderSuccessScreen> with Ti
   Timer? _pollTimer;
   Timer? _countdownTimer;
   bool _navigatedAway = false;
+  bool _cancelling = false;
   late AnimationController _staggerController;
 
   @override
@@ -82,6 +84,11 @@ class _OrderSuccessScreenState extends ConsumerState<OrderSuccessScreen> with Ti
       _navigatedAway = true;
       _pollTimer?.cancel();
       _countdownTimer?.cancel();
+      if (order.orderStatus == 'cancelled_by_user') {
+        context.go(RouteNames.home);
+        AppSnackbar.success(context, 'Order cancelled.');
+        return;
+      }
       Haptics.error();
       final reason = order.cancellationReason.isNotEmpty
           ? order.cancellationReason
@@ -98,6 +105,45 @@ class _OrderSuccessScreenState extends ConsumerState<OrderSuccessScreen> with Ti
       Haptics.success();
       context.push('/orders/track/${widget.orderId}');
     }
+  }
+
+  /// Cancels during the hold, before the restaurant has been sent the order.
+  Future<void> _cancelHeldOrder() async {
+    if (_cancelling) return;
+    Haptics.medium();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Cancel order?'),
+        content: const Text('The restaurant has not received this order yet.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep order')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFFF6464)),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Cancel order', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted || _navigatedAway) return;
+
+    setState(() => _cancelling = true);
+    final err = await ref.read(ordersViewModelProvider.notifier).cancelOrder(widget.orderId);
+    if (!mounted) return;
+    if (err != null) {
+      setState(() => _cancelling = false);
+      ref.invalidate(orderDetailProvider(widget.orderId));
+      AppSnackbar.error(context, err);
+      return;
+    }
+    _navigatedAway = true;
+    _pollTimer?.cancel();
+    _countdownTimer?.cancel();
+    ref.read(activeOrderViewModelProvider.notifier).fetchActiveOrder(isRefresh: true);
+    context.go(RouteNames.home);
+    AppSnackbar.success(context, 'Order cancelled.');
   }
 
   Animation<double> _getInterval(double start, double end) {
@@ -202,6 +248,17 @@ class _OrderSuccessScreenState extends ConsumerState<OrderSuccessScreen> with Ti
                                     color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
                                   ),
                                 ),
+                              ),
+                            ],
+                            // The admin's hold: the screen already rebuilds every
+                            // second, so the countdown and the card's removal at
+                            // zero come for free.
+                            if (order.isHeldFromRestaurant) ...[
+                              const SizedBox(height: 20),
+                              _HoldCancelCard(
+                                remaining: order.restaurantReleaseAt!.difference(DateTime.now()),
+                                cancelling: _cancelling,
+                                onCancel: _cancelHeldOrder,
                               ),
                             ],
                             const SizedBox(height: 32),
@@ -397,6 +454,72 @@ class _SuccessBadge extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// "Sending to the restaurant in 0:15" with a Cancel button, while the order
+/// is held back from the restaurant.
+class _HoldCancelCard extends StatelessWidget {
+  final Duration remaining;
+  final bool cancelling;
+  final VoidCallback onCancel;
+  const _HoldCancelCard({required this.remaining, required this.cancelling, required this.onCancel});
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final left = remaining.isNegative ? Duration.zero : remaining;
+    return _card(
+      context,
+      Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(Icons.timer_outlined, size: 18, color: AppColors.primary),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Sending to the restaurant in ${formatCancelRemaining(left)}',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: isDark ? Colors.white : AppColors.textPrimaryLight,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Changed your mind? Cancel now.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          OutlinedButton(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFFFF6464),
+              side: const BorderSide(color: Color(0xFFFF6464), width: 1.5),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: cancelling ? null : onCancel,
+            child: cancelling
+                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Text('Cancel', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -2,11 +2,13 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 
-/// How long after placing an order the customer may still cancel it.
+/// How long after placing an order the customer may still cancel it, when the
+/// order was not held.
 ///
-/// Mirrors `CANCELLATION_WINDOW_MS` in the backend's `order.service.js`, which
-/// is the value that actually decides. This one only draws the countdown, so if
-/// the two ever disagree the server still wins and the app shows a refusal.
+/// A held order counts down to the backend's `restaurantReleaseAt` instead
+/// (the admin's Master Settings → Cancellation Policy hold), see
+/// `OrderModel.cancelWindowEnd`. Either way this only draws the countdown: the
+/// server decides, and a late tap gets its refusal.
 const kCancelWindow = Duration(seconds: 90);
 
 /// The moment cancellation closes for an order placed at [placedAt].
@@ -139,10 +141,15 @@ class CancelWindowGate extends StatelessWidget {
     required this.statusAllows,
     required this.builder,
     this.onExpired,
+    this.deadline,
   });
 
   /// The server's order-creation timestamp.
   final DateTime? placedAt;
+
+  /// When cancellation closes, if the order knows it (the admin's hold). Wins
+  /// over the fixed window from [placedAt].
+  final DateTime? deadline;
 
   final bool statusAllows;
   final Widget Function(BuildContext context, Duration remaining) builder;
@@ -151,14 +158,15 @@ class CancelWindowGate extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (!statusAllows) return const SizedBox.shrink();
+    final end = deadline ?? (placedAt == null ? null : cancelWindowEndsAt(placedAt!));
     // No timestamp means no countdown to draw, but the status rule still says
     // yes — offer the button and let the backend arbitrate.
-    if (placedAt == null) {
+    if (end == null) {
       return builder(context, kCancelWindow);
     }
 
     return CancelWindowCountdown(
-      deadline: cancelWindowEndsAt(placedAt!),
+      deadline: end,
       onExpired: onExpired,
       builder: (context, remaining) => remaining == Duration.zero
           ? const SizedBox.shrink()

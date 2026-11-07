@@ -195,6 +195,7 @@ class _OrderTrackingScreenState extends ConsumerState<OrderTrackingScreen> {
                                       // allows it (before the food is on its way).
                                       CancelWindowGate(
                                         placedAt: order.createdAt,
+                                        deadline: order.cancelWindowEnd,
                                         statusAllows: order.isCancellableStatus,
                                         onExpired: _refresh,
                                         builder: (context, remaining) =>
